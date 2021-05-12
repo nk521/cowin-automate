@@ -3,6 +3,40 @@ import requests
 import json
 import sys
 import hashlib
+from hashlib import md5
+from Cryptodome import Random
+from Cryptodome.Cipher import AES
+import base64
+
+BLOCK_SIZE = 16
+SECRET = b"b5cab167-7977-4df1-8027-a63aa144f04e"
+KEY = b"CoWIN@$#&*(!@%^&"
+
+def pad(data):
+    length = BLOCK_SIZE - (len(data) % BLOCK_SIZE)
+    return data + (chr(length)*length).encode()
+
+def unpad(data):
+    return data[:-(data[-1] if type(data[-1]) == int else ord(data[-1]))]
+
+def bytes_to_key(data, salt, output=48):
+    # extended from https://gist.github.com/gsakkis/4546068
+    assert len(salt) == 8, len(salt)
+    data += salt
+    key = md5(data).digest()
+    final_key = key
+    while len(final_key) < output:
+        key = md5(key + data).digest()
+        final_key += key
+    return final_key[:output]
+
+def encrypt(message, passphrase):
+    salt = Random.new().read(8)
+    key_iv = bytes_to_key(passphrase, salt, 32+16)
+    key = key_iv[:32]
+    iv = key_iv[32:]
+    aes = AES.new(key, AES.MODE_CBC, iv)
+    return base64.b64encode(b"Salted__" + salt + aes.encrypt(pad(message)))
 
 BASEURL = "https://cdn-api.co-vin.in/api/v2"
 HEADERS = {
@@ -20,12 +54,6 @@ HEADERS = {
     'accept-language': 'en-GB,en-US;q=0.9,en;q=0.8',
 }
 
-class BearerAuth(requests.auth.AuthBase):
-    def __init__(self, token):
-        self.token = token
-    def __call__(self, r):
-        r.headers["authorization"] = "Bearer " + self.token
-        return r
 
 class CoWin:
     def __init__(self, phonenumber, otp, txnId, debug=False):
@@ -39,8 +67,26 @@ class CoWin:
     
     @staticmethod
     def sendOtp(phonenumber, debug=False):
+        # this is the API that the website uses
+        # theres also a secret block that goes in with mobile as param
+        # its made using cryptojs afaiu and the key is "CoWIN@$#&*(!@%^&" as far as I've reversed the JS source
+        # "b5cab167-7977-4df1-8027-a63aa144f04e" is the "default"
+        ############################################################
+        ############################################################
+        # anonymousLogin() {
+        #             return this.http.post(i.a.auth_prefix_url + "/guest/login", {
+        #                 user_name: "b5cab167-7977-4df1-8027-a63aa144f04e"
+        #             }, {
+        #                 responseType: "text"
+        #             }).pipe(Object(r.a)(t=>t))
+        #         }
+        ############################################################
+        ############################################################
+        
         p = {"mobile": str(phonenumber)}
-        r = requests.post(BASEURL+"/auth/public/generateOTP", data=json.dumps(p), headers=HEADERS)
+        p["secret"] = encrypt(SECRET, KEY).decode()
+
+        r = requests.post(BASEURL+"/auth/generateMobileOTP", data=json.dumps(p), headers=HEADERS)
         if r.text == "OTP Already Sent":
             print(f"OTP already sent! If not received then try again after 3 minutes.")
         elif r.text.find("txnId"):
@@ -90,7 +136,7 @@ class CoWin:
     
     def findByPincode(self, pinCode, dateForVaccineSearch):
         p = {"pincode": pinCode, "date": f"{dateForVaccineSearch[0]}-{dateForVaccineSearch[1]}-2021"}
-        r = requests.get(BASEURL + "/appointment/sessions/calendarByPin", params=p, headers={**HEADERS, **{"Accept-Language": "hi_IN"}, **{"authorization": f"Bearer {self.token}"}})
+        r = requests.get(BASEURL + "/appointment/sessions/public/calendarByPin", params=p, headers={**HEADERS, **{"Accept-Language": "hi_IN"}, **{"authorization": f"Bearer {self.token}"}})
         
         if r.status_code == 200:
             vaccineCenters: List[Dict] = eval(r.text)["centers"]
@@ -116,4 +162,4 @@ if otp_send_successfull:
     CoWinObj.listAllFamilyMembers()
     pinCode = input("Enter your pincode : ")
     dateForVaccineSearch = input("Enter the date (dd/mm | add a forward slash) (Leave it blank if you want to search it for tomorrow) : ").split("/")
-    CoWinObj.findByPincode(pincode=pinCode, dateForVaccineSearch=dateForVaccineSearch)
+    CoWinObj.findByPincode(pinCode=pinCode, dateForVaccineSearch=dateForVaccineSearch)

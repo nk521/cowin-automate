@@ -170,11 +170,15 @@ class CoWin:
         print(f"Selected {str([self.familyMembers[x]['name'] for x in self.selectedFamilyMembers])[1:-1]}")
     
     def findByPincodeAndBookVaccine(self, pinCode, dateForVaccineSearch):
-
+        temp = 0
         while True:
+            temp += 1
+            if temp % 10 == 0:
+                temp=0
+                print(".",end="")
             # date is in format dd-mm-yyyy
             p = {"pincode": pinCode, "date": f"{dateForVaccineSearch}"}
-            r = requests.get(BASEURL + "/appointment/sessions/public/calendarByPin", params=p, headers={**HEADERS, **{"Accept-Language": "hi_IN"}, **{"authorization": f"Bearer {self.token}"}})
+            r = requests.get(BASEURL + "/appointment/sessions/public/calendarByPin", params=p, headers=HEADERS)
             
             if r.status_code == 200:
                 vaccineCenters: List[Dict] = eval(r.text)["centers"]

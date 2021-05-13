@@ -7,6 +7,7 @@ from hashlib import md5
 from Cryptodome import Random
 from Cryptodome.Cipher import AES
 import base64
+import datetime
 
 BLOCK_SIZE = 16
 SECRET = b"b5cab167-7977-4df1-8027-a63aa144f04e"
@@ -56,17 +57,19 @@ HEADERS = {
 
 
 class CoWin:
-    def __init__(self, phonenumber, otp, txnId, debug=False):
+    def __init__(self, phonenumber, debug=False):
         self.phonenumber = phonenumber
-        self.otp = otp
-        self.txnId = txnId
+        self.otp = ""
+        self.txnId = ""
         self.debug = debug
         self.token = ""
         self.goodToGoCenters = []
-        self.confirmOtp()
+        self.familyMembers = []
+        self.selectedFamilyMembers = []
+        self.selectedFamilyMembersNumber = 0
+        self.isVaccineBooked = False
     
-    @staticmethod
-    def sendOtp(phonenumber, debug=False):
+    def sendOtp(self):
         # this is the API that the website uses
         # theres also a secret block that goes in with mobile as param
         # its made using cryptojs afaiu and the key is "CoWIN@$#&*(!@%^&" as far as I've reversed the JS source
@@ -83,83 +86,125 @@ class CoWin:
         ############################################################
         ############################################################
         
-        p = {"mobile": str(phonenumber)}
+        p = {"mobile": str(self.phonenumber)}
         p["secret"] = encrypt(SECRET, KEY).decode()
 
         r = requests.post(BASEURL+"/auth/generateMobileOTP", data=json.dumps(p), headers=HEADERS)
         if r.text == "OTP Already Sent":
             print(f"OTP already sent! If not received then try again after 3 minutes.")
+        
         elif r.text.find("txnId"):
             response_text = eval(r.text)
             print(f"OTP sent to +91-{phonenumber}. This OTP is valid for 3 minutes.")
-            if debug:
+            
+            if self.debug:
                 print(f"DEBUG: txnId -> {response_text['txnId']}")
-            return {"txnId": response_text['txnId']}
+            
+            self.txnId = response_text['txnId']
+        
         else:
             print("Something went wrong while sending OTP. Closing.")
             sys.exit(-1)
 
+
     def confirmOtp(self):
-        p = {
+        while True:
+            self.otp = input("Enter your OTP : ")
+            
+            p = {
                 "otp": hashlib.sha256(self.otp.encode()).hexdigest(),
                 "txnId": self.txnId
             }
-        r = requests.post(BASEURL+"/auth/validateMobileOtp", data=json.dumps(p), headers=HEADERS)
-        if r.status_code == 200:
-            self.token = eval(r.text)["token"]
-            print(f"Logged in successfully as +91-{self.phonenumber}")
-            if self.debug:
-                print(f"DEBUG: token -> {self.token}")
-        
-        else:
-            print("Something went wrong while confirming OTP. Try again. Closing.")
-            sys.exit(-1)
+
+            r = requests.post(BASEURL+"/auth/validateMobileOtp", data=json.dumps(p), headers=HEADERS)
+            
+            if r.status_code == 200:
+                self.token = eval(r.text)["token"]
+                print(f"Logged in successfully as +91-{self.phonenumber}")
+                if self.debug:
+                    print(f"DEBUG: token -> {self.token}")
+                
+                break
+            
+            elif r.status_code == 400 and (eval(r.text).get("error") == "Invalid OTP"):
+                print("Wrong OTP! Try again!")
+                continue
+
+            else:
+                print("Something went wrong while confirming OTP. Try again. Closing.")
+                sys.exit(-1)
     
-    def listAllFamilyMembers(self):
+    def _listAllFamilyMembers(self):
         r = requests.get(BASEURL+"/appointment/beneficiaries", headers={**HEADERS, **{"authorization": f"Bearer {self.token}"}})
-        familyMembers: List[Dict] = eval(r.text)["beneficiaries"]
+        self.familyMembers: List[Dict] = eval(r.text)["beneficiaries"]
         
-        for familyMember in familyMembers:
-            print("\n" + "="*20 + "\n")
-            print(f"Reference ID : {familyMember['beneficiary_reference_id']}")
-            print(f"Name : {familyMember['name']}")
-            print(f"Birth Year : {familyMember['birth_year']}")
-            print(f"Gender : {familyMember['gender']}")
-            print(f"Mobile Number : {familyMember['mobile_number']}")
-            print(f"Photo ID Type : {familyMember['photo_id_type']}")
-            print(f"Photo ID Number : {familyMember['photo_id_number']}")
-            print(f"Vaccination Status : {familyMember['vaccination_status']}")
-            print(f"Vaccine : {familyMember['vaccine']}")
-            print(f"Dose 1 Date : {familyMember['dose1_date']}")
-            print(f"Dose 2 Date : {familyMember['dose2_date']}")
-            # print(f"Appointments : {familyMember['beneficiary_reference_id']}")
+        # for familyMember in self.familyMembers:
+        #     print("\n" + "="*20 + "\n")
+        #     print(f"Reference ID : {familyMember['beneficiary_reference_id']}")
+        #     print(f"Name : {familyMember['name']}")
+        #     print(f"Birth Year : {familyMember['birth_year']}")
+        #     print(f"Gender : {familyMember['gender']}")
+        #     print(f"Mobile Number : {familyMember['mobile_number']}")
+        #     print(f"Photo ID Type : {familyMember['photo_id_type']}")
+        #     print(f"Photo ID Number : {familyMember['photo_id_number']}")
+        #     print(f"Vaccination Status : {familyMember['vaccination_status']}")
+        #     print(f"Vaccine : {familyMember['vaccine']}")
+        #     print(f"Dose 1 Date : {familyMember['dose1_date']}")
+        #     print(f"Dose 2 Date : {familyMember['dose2_date']}")
+        #     # print(f"Appointments : {familyMember['beneficiary_reference_id']}")
+    
+    def getFamilyMembersSelection(self):
+        #init
+        self._listAllFamilyMembers()
+        for x, familyMember in enumerate(self.familyMembers):
+            print(f"[{x+1}] - {familyMember['name']} | {familyMember['gender']}")
+        
+        self.selectedFamilyMembers = input("Enter comma seperated values : ").split(",")
+        self.selectedFamilyMembers = [int(x) - 1 for x in self.selectedFamilyMembers]
+        self.selectedFamilyMembersNumber = len(self.selectedFamilyMembers)
+        
+        # Oh yeah look at this garbage
+        print(f"Selected {str([self.familyMembers[x]['name'] for x in self.selectedFamilyMembers])[1:-1]}")
     
     def findByPincode(self, pinCode, dateForVaccineSearch):
-        p = {"pincode": pinCode, "date": f"{dateForVaccineSearch[0]}-{dateForVaccineSearch[1]}-2021"}
+        # date is in format dd-mm-yyyy
+        p = {"pincode": pinCode, "date": f"{dateForVaccineSearch}-2021"}
         r = requests.get(BASEURL + "/appointment/sessions/public/calendarByPin", params=p, headers={**HEADERS, **{"Accept-Language": "hi_IN"}, **{"authorization": f"Bearer {self.token}"}})
         
         if r.status_code == 200:
             vaccineCenters: List[Dict] = eval(r.text)["centers"]
 
+            print("\n\nDEBUG\n\n" + str(vaccineCenters[0]))
             for vaccineCenter in vaccineCenters:
                 for session in vaccineCenter["sessions"]:
                     if session["min_age_limit"] == 18 and session["available_capacity"] > 0:
                         self.goodToGoCenters.append(vaccineCenter)
 
-            if not len(self.goodToGoCenters):
+            # Doing this bc I want my family members to go in the same center
+            if len(self.goodToGoCenters) < self.selectedFamilyMembersNumber:
                 print("No vaccine centers available!")
             
             else:
                 print(self.goodToGoCenters)
+                # _bookVaccine()
+    
+    # def _bookVaccine(self):
+    #     if not self.isVaccineBooked:
+            
+    #     ...
 
 
 debug = True
 phonenumber = input("Enter your phone number (without country code) : ")
-otp_send_successfull = CoWin.sendOtp(phonenumber=phonenumber, debug = debug)
-if otp_send_successfull:
-    otp = input("Enter your OTP : ")
-    CoWinObj = CoWin(phonenumber=phonenumber, otp=otp, txnId=otp_send_successfull["txnId"], debug=debug)
-    CoWinObj.listAllFamilyMembers()
-    pinCode = input("Enter your pincode : ")
-    dateForVaccineSearch = input("Enter the date (dd/mm | add a forward slash) (Leave it blank if you want to search it for tomorrow) : ").split("/")
-    CoWinObj.findByPincode(pinCode=pinCode, dateForVaccineSearch=dateForVaccineSearch)
+CoWinObj = CoWin(phonenumber=phonenumber, debug=debug)
+CoWinObj.sendOtp()
+CoWinObj.confirmOtp()
+CoWinObj.getFamilyMembersSelection()
+pinCode = input("Enter your pincode : ")
+
+temp_tomorrow_date = (datetime.date.today() + datetime.timedelta(days=1)).strftime("%d-%m")
+dateForVaccineSearch = input(f"Enter the date (dd-mm | add a hyphen) (Leave it blank if you want to search it for tomorrow {temp_tomorrow_date}-2021) : ")
+if not dateForVaccineSearch:
+    dateForVaccineSearch = temp_tomorrow_date
+
+CoWinObj.findByPincode(pinCode=pinCode, dateForVaccineSearch=dateForVaccineSearch)

@@ -1,7 +1,7 @@
 from typing import Dict, List
 import requests
 import json
-import sys
+import sys, os
 import hashlib
 from hashlib import md5
 from Cryptodome import Random
@@ -9,6 +9,8 @@ from Cryptodome.Cipher import AES
 import base64
 import datetime
 import time
+import jwt
+
 
 BLOCK_SIZE = 16
 SECRET = b"b5cab167-7977-4df1-8027-a63aa144f04e"
@@ -64,11 +66,11 @@ class CoWin:
         self.txnId = ""
         self.debug = debug
         self.token = ""
-        self.goodToGoCenters = []
         self.familyMembers = []
         self.selectedFamilyMembers = []
         self.selectedFamilyMembersNumber = 0
         self.isVaccineBooked = False
+        self.appointment_id = ""
     
     def sendOtp(self):
         # this is the API that the website uses
@@ -96,7 +98,7 @@ class CoWin:
         
         elif r.text.find("txnId"):
             response_text = eval(r.text)
-            print(f"OTP sent to +91-{phonenumber}. This OTP is valid for 3 minutes.")
+            print(f"OTP sent to +91-{self.phonenumber}. This OTP is valid for 3 minutes.")
             
             if self.debug:
                 print(f"DEBUG: txnId -> {response_text['txnId']}")
@@ -171,115 +173,55 @@ class CoWin:
 
         while True:
             # date is in format dd-mm-yyyy
-            p = {"pincode": pinCode, "date": f"{dateForVaccineSearch}-2021"}
+            p = {"pincode": pinCode, "date": f"{dateForVaccineSearch}"}
             r = requests.get(BASEURL + "/appointment/sessions/public/calendarByPin", params=p, headers={**HEADERS, **{"Accept-Language": "hi_IN"}, **{"authorization": f"Bearer {self.token}"}})
             
             if r.status_code == 200:
                 vaccineCenters: List[Dict] = eval(r.text)["centers"]
 
-                # print("\n\nDEBUG\n\n" + str(vaccineCenters[0]))
                 for vaccineCenter in vaccineCenters:
-                    for session in vaccineCenter["sessions"]:
-                        # Doing this bc I want my family members to go in the same center
-                        if session["min_age_limit"] == 18:
-                            self.goodToGoCenters.append(vaccineCenter)
-                            break
+                    if vaccineCenter["fee_type"] == "Free":
+                        for session in vaccineCenter["sessions"]:
+                            if session["min_age_limit"] == 18:
+                                if session["available_capacity"] >= self.selectedFamilyMembersNumber:
+                                    os.system(f'ntfy -b telegram send "Vaccine available! Check terminal now!"')
+                                    self._bookVaccine(vaccineCenter)
+                                    if self.isVaccineBooked:
+                                        sys.exit()
 
-                if len(self.goodToGoCenters) > 0:
-                    print("No vaccine centers available!")
-                
-                else:
-                    print(f"Found {len(self.goodToGoCenters)} centers! Booking vaccines!")
-                    self._bookVaccine()
-                    if self.isVaccineBooked:
-                        break
-            
-            # need to find a cleaner way to do this. 
-            # 100 calls/5 minutes/IP
             time.sleep(5)
 
 
-    def _bookVaccine(self):
-        # try booking for this center
-        # if not successfull then next center
-        # if not successfull in all centers then clear self.goodToGoCenters
-        # if successfull then switch self.isVaccineBooked to True
+    def _bookVaccine(self, vaccineCenter):
+        if int(datetime.datetime.now().timestamp()) > jwt.decode(self.token, options={"verify_signature": False})["exp"]:
+            self.sendOtp()
+            self.confirmOtp()
         
-        # {
-        #   "center_id": 1289,
-        #   "name": "lalalalala",
-        #   "address": "lalalallaa",
-        #   "state_name": "Delhi",
-        #   "district_name": "asfgasg",
-        #   "block_name": "Not Applicable",
-        #   "pincode": 110001,
-        #   "lat": 28,
-        #   "long": 77,
-        #   "from": "09:00:00",
-        #   "to": "17:00:00",
-        #   "fee_type": "Free",
-        #   "sessions": [
-        #     {
-        #       "session_id": "7d5380d3-4517-41d3-a644-d07263829064",
-        #       "date": "13-05-2021",
-        #       "available_capacity": 0,
-        #       "min_age_limit": 18,
-        #       "vaccine": "COVAXIN",
-        #       "slots": [
-        #         "09:00AM-11:00AM",
-        #         "11:00AM-01:00PM",
-        #         "01:00PM-03:00PM",
-        #         "03:00PM-05:00PM"
-        #       ]
-        #     },
-        #     {
-        #       "session_id": "7d5380d3-4517-41d3-a644-328758390765",
-        #       "date": "15-05-2021",
-        #       "available_capacity": 0,
-        #       "min_age_limit": 45,
-        #       "vaccine": "COVAXIN",
-        #       "slots": [
-        #         "09:00AM-11:00AM",
-        #         "11:00AM-01:00PM",
-        #         "01:00PM-03:00PM",
-        #         "03:00PM-05:00PM"
-        #       ]
-        #     }
-        #   ]
-        # }
-
-        for center in self.goodToGoCenters:
-            if not center["fee_type"] == "Free":
-                continue
+        for session in vaccineCenter["sessions"]:
+            time.sleep(0.3)
+            p = {
+                    "dose": 1,
+                    "session_id": session["session_id"],
+                    "slot": session["slots"][-1],
+                    "beneficiaries": [self.familyMembers[x]['beneficiary_reference_id'] for x in self.selectedFamilyMembers]
+                }
             
-            for session in center["sessions"]:
-                if session["min_age_limit"] == 18:
-                    if session["available_capacity"] >= self.selectedFamilyMembersNumber:
-                        p = {
-                                "dose": 1,
-                                "session_id": session["session_id"],
-                                "slot": session["slots"][-1],
-                                "beneficiaries": [self.familyMembers[x]['beneficiary_reference_id'] for x in self.selectedFamilyMembers]
-                            }
-                        
-                        r = requests.post(BASEURL+"/appointment/schedule", data=json.dumps(p), headers=HEADERS)
+            r = requests.post(BASEURL+"/appointment/schedule", data=json.dumps(p), headers=HEADERS)
 
-                        if r.status_code == 200:
-                            self.isVaccineBooked = True
-                            self.appointment_id = eval(r.text)["appointment_id"]
-                            print(f"Vaccine Booked! Appointment ID -> {eval(r.text)['appointment_id']}")
-                            print(f"Vaccine -> {eval(r.text)['appointment_id']}")
-                            print(f"slot -> {session['slots'][-1]}")
-                            print(f"Center Name -> {center['name']}")
-                            print(f"Center Address -> {center['address']}")
-                            
-                            break
-                        
-                        else:
-                            self.isVaccineBooked = False
-                            continue
+            if r.status_code == 200:
+                self.isVaccineBooked = True
+                self.appointment_id = eval(r.text)["appointment_id"]
+                print(f"Vaccine Booked! Appointment ID -> {eval(r.text)['appointment_id']}")
+                print(f"Vaccine -> {eval(r.text)['appointment_id']}")
+                print(f"slot -> {session['slots'][-1]}")
+                print(f"Center Name -> {vaccineCenter['name']}")
+                print(f"Center Address -> {vaccineCenter['address']}")
                 
-                time.sleep(0.5)
+                break
+            
+            else:
+                self.isVaccineBooked = False
+                continue
 
 
 debug = True
@@ -291,7 +233,7 @@ CoWinObj.getFamilyMembersSelection()
 pinCode = input("Enter your pincode : ")
 
 dateForVaccineSearch = int(input(f"How many days from today? : "))
-dateForVaccineSearch = (datetime.date.today() + datetime.timedelta(days=int(dateForVaccineSearch))).strftime("%d-%m")
-print(f"Selected date -> {(datetime.date.today() + datetime.timedelta(days=dateForVaccineSearch)).strftime('%d-%m-%Y')}")
+dateForVaccineSearch = (datetime.date.today() + datetime.timedelta(days=int(dateForVaccineSearch))).strftime("%d-%m-%Y")
+print(f"Selected date -> {dateForVaccineSearch}")
 
 CoWinObj.findByPincodeAndBookVaccine(pinCode=pinCode, dateForVaccineSearch=dateForVaccineSearch)

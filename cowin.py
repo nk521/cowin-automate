@@ -188,7 +188,7 @@ class CoWin:
                         for session in vaccineCenter["sessions"]:
                             if session["min_age_limit"] == 18:
                                 if session["available_capacity"] >= self.selectedFamilyMembersNumber:
-                                    os.system(f'ntfy -b telegram send "Vaccine available! Check terminal now!"')
+                                    os.system(f'ntfy -b telegram send "Vaccine available! Check terminal now!";'*3)
                                     self._bookVaccine(vaccineCenter)
                                     if self.isVaccineBooked:
                                         sys.exit()
@@ -199,6 +199,7 @@ class CoWin:
     def _bookVaccine(self, vaccineCenter):
         if int(datetime.datetime.now().timestamp()) > jwt.decode(self.token, options={"verify_signature": False})["exp"]:
             self.sendOtp()
+            os.system(f'ntfy -b telegram send "Enter OTP on terminal!";'*3)
             self.confirmOtp()
         
         for session in vaccineCenter["sessions"]:

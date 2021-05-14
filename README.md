@@ -5,6 +5,7 @@ Depends on pyjwt, ntfy, pycryptodomex & requests
 ```python
 python3 -m pip install virtualenv
 python3 -m virtualenv <virtualenv-name>
+<activate virtualenv>
 pip install pyjwt ntfy[telegram] pycryptodomex requests
 
 # configure ntfy now, if you want to use it.

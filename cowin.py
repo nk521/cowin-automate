@@ -10,7 +10,7 @@ import base64
 import datetime
 import time
 import jwt
-
+from cairosvg.surface import PNGSurface
 
 BLOCK_SIZE = 16
 SECRET = b"b5cab167-7977-4df1-8027-a63aa144f04e"
@@ -190,7 +190,7 @@ class CoWin:
                         for session in vaccineCenter["sessions"]:
                             if session["min_age_limit"] == 18:
                                 if session["available_capacity"] >= self.selectedFamilyMembersNumber:
-                                    os.system(f'ntfy -b telegram send "Vaccine available! Check terminal now! {str(datetime.datetime.today())}" &')
+                                    os.system(f'telegram-send "Vaccine available! Check terminal now! {str(datetime.datetime.today())}" &')
                                     self._bookVaccine(session, vaccineCenter)
                                     if self.isVaccineBooked:
                                         sys.exit()
@@ -203,7 +203,7 @@ class CoWin:
         if int(datetime.datetime.now().timestamp()) > jwt.decode(self.token, options={"verify_signature": False})["exp"]:
             print("\n")
             self.sendOtp()
-            os.system(f'ntfy -b telegram send "Enter OTP on terminal! | {str(datetime.datetime.today())}" &')
+            os.system(f'telegram-send "Enter OTP on terminal! | {str(datetime.datetime.today())}" &')
             self.confirmOtp()
         
         # /auth/getRecaptcha
@@ -215,7 +215,10 @@ class CoWin:
         with open("abcd.svg", "w") as f:
             f.write(eval(captcha.text)['captcha'])
         
-        os.system(f"inkview.exe abcd.svg &")
+        with open("abcd.svg", 'rb') as f:
+            PNGSurface.convert(bytestring = f.read(), write_to = open("abcd.png", 'wb'))
+
+        os.system(f"telegram-send -i abcd.png &")
 
         while True:
             self.captchaInput = input("Enter Captcha: ")
@@ -235,7 +238,7 @@ class CoWin:
 
         if r.status_code == 200:
             self.isVaccineBooked = True
-            self.appointment_id = eval(r.text)["appointment_id"]
+            print(r.text)
             print(f"Vaccine Booked! Appointment ID -> {eval(r.text)['appointment_id']}")
             print(f"Vaccine -> {eval(r.text)['appointment_id']}")
             print(f"slot -> {session['slots'][-1]}")

@@ -71,6 +71,7 @@ class CoWin:
         self.selectedFamilyMembersNumber = 0
         self.isVaccineBooked = False
         self.appointment_id = ""
+        self.captchaInput = ""
     
     def sendOtp(self):
         # this is the API that the website uses
@@ -118,7 +119,7 @@ class CoWin:
                 "otp": hashlib.sha256(self.otp.encode()).hexdigest(),
                 "txnId": self.txnId
             }
-
+            
             r = requests.post(BASEURL+"/auth/validateMobileOtp", data=json.dumps(p), headers=HEADERS)
             
             if r.status_code == 200:
@@ -168,6 +169,7 @@ class CoWin:
         
         # Oh yeah look at this garbage
         print(f"Selected {str([self.familyMembers[x]['name'] for x in self.selectedFamilyMembers])[1:-1]}")
+        print([self.familyMembers[x]['beneficiary_reference_id'] for x in self.selectedFamilyMembers])
     
     def findByPincodeAndBookVaccine(self, pinCode, dateForVaccineSearch):
         temp = 0
@@ -175,7 +177,7 @@ class CoWin:
             temp += 1
             if temp % 10 == 0:
                 temp=0
-                print(".",end="")
+                print(" .", end="", flush=True)
             # date is in format dd-mm-yyyy
             p = {"pincode": pinCode, "date": f"{dateForVaccineSearch}"}
             r = requests.get(BASEURL + "/appointment/sessions/public/calendarByPin", params=p, headers=HEADERS)
@@ -188,45 +190,61 @@ class CoWin:
                         for session in vaccineCenter["sessions"]:
                             if session["min_age_limit"] == 18:
                                 if session["available_capacity"] >= self.selectedFamilyMembersNumber:
-                                    os.system(f'ntfy -b telegram send "Vaccine available! Check terminal now!";'*3)
-                                    self._bookVaccine(vaccineCenter)
+                                    os.system(f'ntfy -b telegram send "Vaccine available! Check terminal now! {str(datetime.datetime.today())}" &')
+                                    self._bookVaccine(session, vaccineCenter)
                                     if self.isVaccineBooked:
                                         sys.exit()
 
-            time.sleep(5)
+            # 100 calls/300 seconds
+            time.sleep(3.1)
 
 
-    def _bookVaccine(self, vaccineCenter):
+    def _bookVaccine(self, session, vaccineCenter):
         if int(datetime.datetime.now().timestamp()) > jwt.decode(self.token, options={"verify_signature": False})["exp"]:
+            print("\n")
             self.sendOtp()
-            os.system(f'ntfy -b telegram send "Enter OTP on terminal!";'*3)
+            os.system(f'ntfy -b telegram send "Enter OTP on terminal! | {str(datetime.datetime.today())}" &')
             self.confirmOtp()
         
-        for session in vaccineCenter["sessions"]:
-            time.sleep(0.3)
-            p = {
-                    "dose": 1,
-                    "session_id": session["session_id"],
-                    "slot": session["slots"][-1],
-                    "beneficiaries": [self.familyMembers[x]['beneficiary_reference_id'] for x in self.selectedFamilyMembers]
-                }
-            
-            r = requests.post(BASEURL+"/appointment/schedule", data=json.dumps(p), headers=HEADERS)
+        # /auth/getRecaptcha
+        # /appointment/schedule
+        
+        
+        captcha = requests.post(BASEURL+"/auth/getRecaptcha", data=json.dumps({}), headers={**HEADERS, **{"authorization": f"Bearer {self.token}"}})
+        
+        with open("abcd.svg", "w") as f:
+            f.write(eval(captcha.text)['captcha'])
+        
+        os.system(f"inkview.exe abcd.svg &")
 
-            if r.status_code == 200:
-                self.isVaccineBooked = True
-                self.appointment_id = eval(r.text)["appointment_id"]
-                print(f"Vaccine Booked! Appointment ID -> {eval(r.text)['appointment_id']}")
-                print(f"Vaccine -> {eval(r.text)['appointment_id']}")
-                print(f"slot -> {session['slots'][-1]}")
-                print(f"Center Name -> {vaccineCenter['name']}")
-                print(f"Center Address -> {vaccineCenter['address']}")
-                
-                break
-            
-            else:
-                self.isVaccineBooked = False
-                continue
+        while True:
+            self.captchaInput = input("Enter Captcha: ")
+            if self.captchaInput:
+                break 
+        
+        p = {
+                "dose": 1,
+                "session_id": session["session_id"],
+                "center_id": int(vaccineCenter['center_id']),
+                "slot": session["slots"][-1],
+                "beneficiaries": [self.familyMembers[x]['beneficiary_reference_id'] for x in self.selectedFamilyMembers],
+                "captcha": self.captchaInput
+            }
+
+        r = requests.post(BASEURL+"/appointment/schedule", data=json.dumps(p), headers={**HEADERS, **{"authorization": f"Bearer {self.token}"}})
+
+        if r.status_code == 200:
+            self.isVaccineBooked = True
+            self.appointment_id = eval(r.text)["appointment_id"]
+            print(f"Vaccine Booked! Appointment ID -> {eval(r.text)['appointment_id']}")
+            print(f"Vaccine -> {eval(r.text)['appointment_id']}")
+            print(f"slot -> {session['slots'][-1]}")
+            print(f"Center Name -> {vaccineCenter['name']}")
+            print(f"Center Address -> {vaccineCenter['address']}")
+        
+        else:
+            print(r.status_code, r.text)
+            self.isVaccineBooked = False
 
 
 debug = True

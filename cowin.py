@@ -20,8 +20,10 @@ def pad(data):
     length = BLOCK_SIZE - (len(data) % BLOCK_SIZE)
     return data + (chr(length)*length).encode()
 
+
 def unpad(data):
     return data[:-(data[-1] if type(data[-1]) == int else ord(data[-1]))]
+
 
 def bytes_to_key(data, salt, output=48):
     # extended from https://gist.github.com/gsakkis/4546068
@@ -34,6 +36,7 @@ def bytes_to_key(data, salt, output=48):
         final_key += key
     return final_key[:output]
 
+
 def encrypt(message, passphrase):
     salt = Random.new().read(8)
     key_iv = bytes_to_key(passphrase, salt, 32+16)
@@ -42,7 +45,9 @@ def encrypt(message, passphrase):
     aes = AES.new(key, AES.MODE_CBC, iv)
     return base64.b64encode(b"Salted__" + salt + aes.encrypt(pad(message)))
 
+
 BASEURL = "https://cdn-api.co-vin.in/api/v2"
+
 HEADERS = {
     'authority': 'cdn-api.co-vin.in',
     'sec-ch-ua': '" Not A;Brand";v="99", "Chromium";v="90", "Google Chrome";v="90"',
@@ -72,6 +77,7 @@ class CoWin:
         self.isVaccineBooked = False
         self.appointment_id = ""
         self.captchaInput = ""
+
     
     def sendOtp(self):
         # this is the API that the website uses
@@ -138,6 +144,7 @@ class CoWin:
                 print("Something went wrong while confirming OTP. Try again. Closing.")
                 sys.exit(-1)
     
+
     def _listAllFamilyMembers(self):
         r = requests.get(BASEURL+"/appointment/beneficiaries", headers={**HEADERS, **{"authorization": f"Bearer {self.token}"}})
         self.familyMembers: List[Dict] = eval(r.text)["beneficiaries"]
@@ -157,11 +164,12 @@ class CoWin:
         #     print(f"Dose 2 Date : {familyMember['dose2_date']}")
         #     # print(f"Appointments : {familyMember['beneficiary_reference_id']}")
     
+
     def getFamilyMembersSelection(self):
         #init
         self._listAllFamilyMembers()
         for x, familyMember in enumerate(self.familyMembers):
-            print(f"[{x+1}] - {familyMember['name']} | {familyMember['gender']}")
+            print(f"[{x+1}] - {familyMember['name']} | {familyMember['gender']} | {familyMember['birth_year']}")
         
         self.selectedFamilyMembers = input("Enter comma seperated values : ").split(",")
         self.selectedFamilyMembers = [int(x) - 1 for x in self.selectedFamilyMembers]
@@ -170,6 +178,7 @@ class CoWin:
         # Oh yeah look at this garbage
         print(f"Selected {str([self.familyMembers[x]['name'] for x in self.selectedFamilyMembers])[1:-1]}")
         print([self.familyMembers[x]['beneficiary_reference_id'] for x in self.selectedFamilyMembers])
+    
     
     def findByPincodeAndBookVaccine(self, pinCode, dateForVaccineSearch):
         temp = 0
@@ -190,6 +199,7 @@ class CoWin:
                         for session in vaccineCenter["sessions"]:
                             if session["min_age_limit"] == 18:
                                 if session["available_capacity"] >= self.selectedFamilyMembersNumber:
+                                    print(vaccineCenter)
                                     os.system(f'telegram-send "Vaccine available! Check terminal now! {str(datetime.datetime.today())}" &')
                                     self._bookVaccine(session, vaccineCenter)
                                     if self.isVaccineBooked:
@@ -212,13 +222,13 @@ class CoWin:
         
         captcha = requests.post(BASEURL+"/auth/getRecaptcha", data=json.dumps({}), headers={**HEADERS, **{"authorization": f"Bearer {self.token}"}})
         
-        with open("abcd.svg", "w") as f:
+        with open("captcha.svg", "w") as f:
             f.write(eval(captcha.text)['captcha'])
         
-        with open("abcd.svg", 'rb') as f:
-            PNGSurface.convert(bytestring = f.read(), write_to = open("abcd.png", 'wb'))
+        with open("captcha.svg", 'rb') as f:
+            PNGSurface.convert(bytestring = f.read(), write_to = open("captcha.png", 'wb'))
 
-        os.system(f"telegram-send -i abcd.png &")
+        os.system(f"telegram-send -i captcha.png &")
 
         while True:
             self.captchaInput = input("Enter Captcha: ")
@@ -238,12 +248,26 @@ class CoWin:
 
         if r.status_code == 200:
             self.isVaccineBooked = True
-            print(r.text)
-            print(f"Vaccine Booked! Appointment ID -> {eval(r.text)['appointment_id']}")
-            print(f"Vaccine -> {eval(r.text)['appointment_id']}")
-            print(f"slot -> {session['slots'][-1]}")
-            print(f"Center Name -> {vaccineCenter['name']}")
-            print(f"Center Address -> {vaccineCenter['address']}")
+            self.appointment_id = eval(r.text)['appointment_confirmation_no']
+
+            for member in self.selectedFamilyMembers:
+                template = f"""Vaccine Booked for 
+                Appointment ID -> {self.appointment_id}
+                Vaccine -> {session['vaccine']}
+                Date/Time -> {session['date']} {session['slots'][-1]}
+                Center -> {vaccineCenter['name']} {vaccineCenter['address']}""".replace("  ","")
+                
+                print(template)
+                
+                templateForTelegram = f"Dear {member['name']}, Your vaccination is scheduled for {session['date']} {session['slots'][-1]} at {vaccineCenter['name']} {vaccineCenter['address']}, Your booking reference ID is {member['beneficiary_reference_id']} and your 4 digit secret code for vaccination is {member['beneficiary_reference_id'][member['beneficiary_reference_id']-4:]}. Your vaccine is {session['vaccine']} and your appointment ID is {self.appointment_id}."
+                os.system(f"telegram-send \"{templateForTelegram}\" &")
+        
+            appointmentSlipRequest = requests.get(BASEURL + f"/appointment/appointmentslip/download?appointment_id={self.appointment_id}", headers={**HEADERS, **{"authorization": f"Bearer {self.token}"}})
+            
+            with open("Appointment_Slip.pdf", "wb") as f:
+                f.write(appointmentSlipRequest.content)
+            
+            os.system("telegram-send --file Appointment_Slip.pdf &")
         
         else:
             print(r.status_code, r.text)
